@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: energy-meter-scraper
+  namespace: home
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: energy-meter-scraper
+  template:
+    metadata:
+      labels:
+        app: energy-meter-scraper
+    spec:
+      containers:
+        - name: energy-meter-scraper
+          image: ghcr.io/dzfranklin/energy-meter-scraper:latest
+          env:
+            - name: GLOW_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: glow
+                  key: password
+            - name: INFLUX_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: influx
+                  key: host
+            - name: INFLUX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: influx
+                  key: token
+            - name: INFLUX_ORG
+              valueFrom:
+                secretKeyRef:
+                  name: influx
+                  key: org
+            - name: INFLUX_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: influx
+                  key: bucket
