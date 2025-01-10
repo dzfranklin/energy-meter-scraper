@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 )
 
@@ -150,6 +151,14 @@ type ResourceReadings struct {
 	ResourceId     string       `json:"resourceId"`
 	Data           [][2]float64 `json:"data"`
 	Units          string       `json:"units"`
+}
+
+type Tariff struct {
+	From         Time `json:"from"`
+	CurrentRates struct {
+		StandingCharge float64 `json:"standingCharge"`
+		Rate           float64 `json:"rate"`
+	} `json:"currentRates"`
 }
 
 func (a *API) GetVirtualEntity(id string) (*VirtualEntity, error) {
@@ -368,8 +377,8 @@ func (a *API) GetResourceReadings(query ResourceReadingsQuery) (*ResourceReading
 	params := url.Values{}
 	params.Set("period", query.Period)
 	params.Set("function", query.Function)
-	params.Set("from", encodeTime(query.From))
-	params.Set("to", encodeTime(query.To))
+	params.Set("from", (&Time{query.From}).String())
+	params.Set("to", (&Time{query.To}).String())
 
 	req, newReqErr := http.NewRequest("GET", endpoint+"/resource/"+query.ID+"/readings?"+params.Encode(), nil)
 	if newReqErr != nil {
@@ -406,6 +415,80 @@ func (a *API) GetResourceReadings(query ResourceReadingsQuery) (*ResourceReading
 	return &out, nil
 }
 
-func encodeTime(t time.Time) string {
-	return t.UTC().Format("2006-01-02T15:04:05")
+func (a *API) Tariff(resourceID string) (*Tariff, error) {
+	req, newReqErr := http.NewRequest("GET", endpoint+"/resource/"+resourceID+"/tariff", nil)
+	if newReqErr != nil {
+		return nil, newReqErr
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("token", a.token)
+	req.Header.Set("applicationId", applicationID)
+
+	resp, getErr := http.DefaultClient.Do(req)
+	if getErr != nil {
+		return nil, getErr
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		slog.Info("Tariff request failed", "httpStatus", resp.StatusCode, "body", string(body))
+
+		return nil, fmt.Errorf("http status code %d", resp.StatusCode)
+	}
+
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, readErr
+	}
+
+	var data struct {
+		Data []Tariff `json:"data"`
+	}
+	if deserErr := json.Unmarshal(respBody, &data); deserErr != nil {
+		return nil, deserErr
+	}
+
+	if len(data.Data) == 0 {
+		return nil, fmt.Errorf("no data in tariff response")
+	}
+
+	slices.SortFunc(data.Data, func(a, b Tariff) int {
+		return a.From.Compare(b.From.Time)
+	})
+	tariff := &data.Data[len(data.Data)-1]
+
+	return tariff, nil
+}
+
+type Time struct {
+	time.Time
+}
+
+const glowTimeLayout = "2006-01-02T15:04:05"
+
+func (t *Time) UnmarshalJSON(b []byte) error {
+	var v string
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+
+	for _, layout := range []string{glowTimeLayout, "2006-01-02 15:04:05"} {
+		parsed, err := time.Parse(layout, v)
+		if err == nil {
+			t.Time = parsed
+			return nil
+		}
+	}
+
+	return fmt.Errorf("failed to parse time: %s", string(b))
+}
+
+func (t *Time) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.String())
+}
+
+func (t *Time) String() string {
+	return t.UTC().Format(glowTimeLayout)
 }
